@@ -1,0 +1,86 @@
+version: "3.9"
+
+# ─── Networks ───────────────────────────────────────────────────────────────
+networks:
+  app-net:
+    driver: bridge
+
+# ─── Volumes ────────────────────────────────────────────────────────────────
+volumes:
+  db-data:          # persistent MySQL data
+  frontend-dist:    # shared between nginx and future build step
+
+# ─── Services ───────────────────────────────────────────────────────────────
+services:
+
+  # ── MySQL 8 ────────────────────────────────────────────────────────────────
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+      MYSQL_DATABASE:      ${DB_NAME:-sports_dashboard}
+      MYSQL_USER:          ${DB_USER:-velocity}
+      MYSQL_PASSWORD:      ${DB_PASSWORD}
+    volumes:
+      - db-data:/var/lib/mysql
+      - ./backend/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    networks:
+      - app-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    ports:
+      - "3306:3306"   # remove in production if DB should not be exposed
+
+  # ── Node.js API ────────────────────────────────────────────────────────────
+  api:
+    build:
+      context:    ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV:              production
+      PORT:                  3001
+      CORS_ORIGIN:           ${CORS_ORIGIN:-*}
+      SYNC_API_KEY:          ${SYNC_API_KEY}
+      DB_HOST:               db        # service name resolves inside Docker network
+      DB_PORT:               3306
+      DB_USER:               ${DB_USER:-velocity}
+      DB_PASSWORD:           ${DB_PASSWORD}
+      DB_NAME:               ${DB_NAME:-sports_dashboard}
+      FOOTBALL_DATA_API_KEY: ${FOOTBALL_DATA_API_KEY:-}
+    networks:
+      - app-net
+    # Not exposed directly — Nginx proxies to it
+    expose:
+      - "3001"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── Nginx — reverse proxy + static frontend ────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./frontend:/usr/share/nginx/html:ro
+      # SSL certs — bind-mounted from host after certbot runs
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    networks:
+      - app-net
