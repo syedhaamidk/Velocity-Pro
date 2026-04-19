@@ -319,6 +319,67 @@ router.get('/soccer/:id', async (req, res, next) => {
   }
 });
 
+/* ── Soccer via football-data.org (for fd_m_ matches) ── */
+router.get('/soccer-fd/:id', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const apiKey = process.env.FOOTBALL_DATA_API_KEY;
+    if (!apiKey) {
+      return res.status(503).json({ success: false, error: 'FOOTBALL_DATA_API_KEY not configured.' });
+    }
+    const ck = `sc:soccer-fd:${id}`;
+    const hit = cache.get(ck);
+    if (hit) return res.json({ success: true, data: hit, fromCache: true });
+
+    const d = await get(`https://api.football-data.org/v4/matches/${id}`, {
+      headers: { 'X-Auth-Token': apiKey }
+    });
+
+    const timeline = [];
+    for (const g of (d.goals || [])) {
+      timeline.push({
+        minute: g.minute ? String(g.minute) + (g.injuryTime ? '+' + g.injuryTime : '') : '',
+        text: `${g.scorer?.name || 'Unknown'} (${g.team?.name || ''})${g.assist ? ' · assist: ' + g.assist.name : ''}`,
+        homeScore: null, awayScore: null,
+        isGoal: true, isYellow: false, isRed: false, isSub: false,
+      });
+    }
+    for (const b of (d.bookings || [])) {
+      timeline.push({
+        minute: b.minute ? String(b.minute) : '',
+        text: `${b.player?.name || 'Unknown'} (${b.team?.name || ''})`,
+        homeScore: null, awayScore: null,
+        isGoal: false,
+        isYellow: b.card === 'YELLOW_CARD',
+        isRed: b.card === 'RED_CARD' || b.card === 'YELLOW_RED_CARD',
+        isSub: false,
+      });
+    }
+    timeline.sort((a, b) => (parseInt(a.minute) || 0) - (parseInt(b.minute) || 0));
+
+    const lineups = (d.lineups || []).map(l => ({
+      team: l.team?.name || '',
+      abbrev: l.team?.shortName || '',
+      logo: '',
+      starters: (l.lineup || []).map(p => ({ name: p.name || '', jersey: p.shirtNumber || '', position: p.position || '' })),
+      bench: (l.bench || []).map(p => ({ name: p.name || '', jersey: p.shirtNumber || '', position: p.position || '' })),
+    }));
+
+    const teamStats = [
+      { team: d.homeTeam?.name || 'Home', abbrev: d.homeTeam?.shortName || '', logo: '', stats: {} },
+      { team: d.awayTeam?.name || 'Away', abbrev: d.awayTeam?.shortName || '', logo: '', stats: {} },
+    ];
+
+    const notes = d.competition?.name ? `${d.competition.name} · Matchday ${d.matchday || ''}` : null;
+    const payload = { teamStats, timeline, lineups, notes };
+    cache.set(ck, payload);
+    res.json({ success: true, data: payload });
+  } catch (err) {
+    log.error('[scorecard/soccer-fd]', err.message);
+    next(err);
+  }
+});
+
 /* ── Cricket ── */
 router.get('/cricket/:id', async (req, res, next) => {
   try {

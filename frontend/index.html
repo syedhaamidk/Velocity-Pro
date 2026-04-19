@@ -75,6 +75,121 @@ const REFRESH_SECS = 90;
 const LEAGUES = ['All','NBA','EPL','UCL','IPL','NHL','T20','Serie A','Bundesliga','Ligue 1'];
 const LC = { NBA:'#f97316',IPL:'#22c55e',UCL:'#818cf8',EPL:'#38bdf8',NHL:'#22d3ee',NFL:'#dc2626',T20:'#22c55e','Serie A':'#facc15',Bundesliga:'#f97316','Ligue 1':'#f43f5e' };
 
+// ── ESPN public scoreboards (no key needed) ──────────────────────────────────
+const ESPN_ENDPOINTS = {
+  EPL:       'https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard',
+  UCL:       'https://site.api.espn.com/apis/site/v2/sports/soccer/UEFA.CHAMPIONS/scoreboard',
+  Bundesliga:'https://site.api.espn.com/apis/site/v2/sports/soccer/ger.1/scoreboard',
+  'Serie A': 'https://site.api.espn.com/apis/site/v2/sports/soccer/ita.1/scoreboard',
+  'Ligue 1': 'https://site.api.espn.com/apis/site/v2/sports/soccer/fra.1/scoreboard',
+  'La Liga': 'https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/scoreboard',
+  NBA:       'https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard',
+  NHL:       'https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/scoreboard',
+};
+
+async function fetchESPNScores() {
+  const map = {};
+  await Promise.allSettled(Object.entries(ESPN_ENDPOINTS).map(async ([league, url]) => {
+    try {
+      const r = await fetch(url);
+      if (!r.ok) return;
+      const d = await r.json();
+      for (const ev of (d.events || [])) {
+        const comp = ev.competitions && ev.competitions[0];
+        if (!comp) continue;
+        const homeC = (comp.competitors || []).find(c => c.homeAway === 'home');
+        const awayC = (comp.competitors || []).find(c => c.homeAway === 'away');
+        if (!homeC || !awayC) continue;
+        const desc = ((comp.status && comp.status.type && comp.status.type.description) || '').toLowerCase();
+        const entry = {
+          home_score: homeC.score != null ? String(homeC.score) : null,
+          away_score: awayC.score != null ? String(awayC.score) : null,
+          clock:      (comp.status && comp.status.displayClock) || '',
+          period:     (comp.status && comp.status.period) || '',
+          inProgress: desc.includes('progress') || desc.includes('half') || desc.includes('end'),
+          completed:  !!(comp.status && comp.status.type && comp.status.type.completed),
+          homeName:   (homeC.team && homeC.team.displayName) || '',
+          awayName:   (awayC.team && awayC.team.displayName) || '',
+          homeShort:  (homeC.team && homeC.team.shortDisplayName) || '',
+          awayShort:  (awayC.team && awayC.team.shortDisplayName) || '',
+          homeAbbr:   (homeC.team && homeC.team.abbreviation) || '',
+          awayAbbr:   (awayC.team && awayC.team.abbreviation) || '',
+          league,
+        };
+        map[entry.homeName + '|' + entry.awayName] = entry;
+        map[entry.homeShort + '|' + entry.awayShort] = entry;
+        map[entry.homeAbbr + '|' + entry.awayAbbr] = entry;
+      }
+    } catch(e) {}
+  }));
+  return map;
+}
+
+function lookupESPN(espnMap, match) {
+  if (!espnMap || !match) return null;
+  const direct = espnMap[match.home_team + '|' + match.away_team];
+  if (direct) return direct;
+  const ht = (match.home_team || '').toLowerCase();
+  const at = (match.away_team || '').toLowerCase();
+  const htw = ht.split(' ')[0];
+  const atw = at.split(' ')[0];
+  return Object.values(espnMap).find(e =>
+    e.league === match.league &&
+    (e.homeName.toLowerCase().includes(htw) || ht.includes((e.homeName.toLowerCase().split(' ')[0]) || 'zzz')) &&
+    (e.awayName.toLowerCase().includes(atw) || at.includes((e.awayName.toLowerCase().split(' ')[0]) || 'zzz'))
+  ) || null;
+}
+
+// ── Streaming watch links (sport-section deep links) ─────────────────────────
+const WATCH_LINKS = {
+  NBA:[
+    {name:'NBA League Pass',url:'https://www.nba.com/watch/live',                        color:'#f97316',icon:'🏀'},
+    {name:'ESPN+',          url:'https://www.espn.com/watch/',                            color:'#cc0000',icon:'📺'},
+    {name:'JioHotstar',     url:'https://www.jiohotstar.com/in/sports/basketball',        color:'#1f80e0',icon:'🎬'},
+  ],
+  NHL:[
+    {name:'NHL.tv',         url:'https://www.nhl.com/tv/live',                            color:'#22d3ee',icon:'🏒'},
+    {name:'ESPN+',          url:'https://www.espn.com/watch/',                            color:'#cc0000',icon:'📺'},
+    {name:'JioHotstar',     url:'https://www.jiohotstar.com/in/sports',                   color:'#1f80e0',icon:'🎬'},
+  ],
+  EPL:[
+    {name:'JioHotstar',     url:'https://www.jiohotstar.com/in/sports/football',          color:'#1f80e0',icon:'🎬'},
+    {name:'Sky Sports',     url:'https://www.skysports.com/watch-sky-sports',             color:'#00a0e0',icon:'📡'},
+    {name:'Peacock',        url:'https://www.peacocktv.com/sports/soccer',                color:'#cc0000',icon:'📺'},
+  ],
+  UCL:[
+    {name:'Sony LIV',       url:'https://www.sonyliv.com/sports/football',                color:'#ff6b35',icon:'🎬'},
+    {name:'DAZN',           url:'https://www.dazn.com/en-IN/sport/football',              color:'#00e5a0',icon:'📺'},
+    {name:'JioHotstar',     url:'https://www.jiohotstar.com/in/sports/football',          color:'#1f80e0',icon:'🎬'},
+  ],
+  IPL:[
+    {name:'JioHotstar',     url:'https://www.jiohotstar.com/in/sports/cricket',           color:'#1f80e0',icon:'🎬'},
+    {name:'JioCinema',      url:'https://www.jiocinema.com/sports',                       color:'#a855f7',icon:'🏏'},
+    {name:'Star Sports',    url:'https://www.jiohotstar.com/in/sports/cricket',           color:'#f59e0b',icon:'⭐'},
+  ],
+  T20:[
+    {name:'JioHotstar',     url:'https://www.jiohotstar.com/in/sports/cricket',           color:'#1f80e0',icon:'🎬'},
+    {name:'Sony LIV',       url:'https://www.sonyliv.com/sports/cricket',                 color:'#ff6b35',icon:'📺'},
+    {name:'Willow TV',      url:'https://www.willow.tv/watch/live',                       color:'#22c55e',icon:'🏏'},
+  ],
+  'Serie A':[
+    {name:'Sony LIV',       url:'https://www.sonyliv.com/sports/football',                color:'#ff6b35',icon:'⚽'},
+    {name:'DAZN',           url:'https://www.dazn.com/en-IN/sport/football',              color:'#00e5a0',icon:'📺'},
+  ],
+  Bundesliga:[
+    {name:'Sony LIV',       url:'https://www.sonyliv.com/sports/football',                color:'#ff6b35',icon:'⚽'},
+    {name:'DAZN',           url:'https://www.dazn.com/en-IN/sport/football',              color:'#00e5a0',icon:'📺'},
+  ],
+  'Ligue 1':[
+    {name:'JioCinema',      url:'https://www.jiocinema.com/sports',                       color:'#3b82f6',icon:'⚽'},
+    {name:'beIN Sports',    url:'https://www.beinsports.com/en/live',                     color:'#e11d48',icon:'📺'},
+  ],
+  'La Liga':[
+    {name:'Sony LIV',       url:'https://www.sonyliv.com/sports/football',                color:'#ff6b35',icon:'⚽'},
+    {name:'DAZN',           url:'https://www.dazn.com/en-IN/sport/football',              color:'#00e5a0',icon:'📺'},
+  ],
+};
+
 function sportOf(match) {
   if (match.sport) return match.sport;
   if (match.league === 'NBA') return 'basketball';
@@ -84,14 +199,11 @@ function sportOf(match) {
 }
 
 function fmtDate(dateStr) {
+  if (!dateStr) return '';
   const d = new Date(dateStr);
   return d.toLocaleString('en-IN', {
-    timeZone: 'Asia/Kolkata',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true
+    timeZone:'Asia/Kolkata', month:'short', day:'numeric',
+    hour:'2-digit', minute:'2-digit', hour12:true
   }) + ' IST';
 }
 
@@ -100,16 +212,16 @@ let _setToasts = null;
 function toast(msg, type='info', dur=4000) {
   if (!_setToasts) return;
   const id = Date.now();
-  _setToasts(p=>[...p,{id,msg,type}]);
-  setTimeout(()=>_setToasts(p=>p.filter(t=>t.id!==id)),dur);
+  _setToasts(p => [...p, {id,msg,type}]);
+  setTimeout(() => _setToasts(p => p.filter(t => t.id !== id)), dur);
 }
 function ToastContainer() {
-  const [toasts,setToasts]=useState([]);
-  useEffect(()=>{_setToasts=setToasts;return()=>{_setToasts=null};},[]);
-  const ic={info:'info',success:'check_circle',error:'error',live:'bolt'};
-  const cl={info:'#abcbda',success:'#4ade80',error:'#f87171',live:'#facc15'};
+  const [toasts,setToasts] = useState([]);
+  useEffect(() => { _setToasts = setToasts; return () => { _setToasts = null; }; }, []);
+  const ic = {info:'info',success:'check_circle',error:'error',live:'bolt'};
+  const cl = {info:'#abcbda',success:'#4ade80',error:'#f87171',live:'#facc15'};
   return <div className="fixed top-20 right-4 z-[300] flex flex-col gap-2 pointer-events-none">
-    {toasts.map(t=>(
+    {toasts.map(t => (
       <div key={t.id} className="toast-in flex items-center gap-3 bg-[#1b2025] border border-[#42494f]/30 rounded-lg px-4 py-3 shadow-2xl min-w-[240px] max-w-[320px]">
         <span className="material-symbols-outlined flex-shrink-0" style={{fontSize:16,color:cl[t.type]}}>{ic[t.type]}</span>
         <span className="text-xs text-[#e0e6ed] leading-snug flex-1">{t.msg}</span>
@@ -119,18 +231,18 @@ function ToastContainer() {
 }
 
 /* ─── ATOMS ─── */
-function Badge({league}){
-  const c=LC[league]||'#abcbda';
-  return <span className="text-[9px] font-mono uppercase tracking-widest px-2 py-0.5 rounded border" style={{color:c,borderColor:`${c}40`,background:`${c}15`}}>{league}</span>;
+function Badge({league}) {
+  const c = LC[league] || '#abcbda';
+  return <span className="text-[9px] font-mono uppercase tracking-widest px-2 py-0.5 rounded border" style={{color:c,borderColor:c+'40',background:c+'15'}}>{league}</span>;
 }
-function Avatar({name='',logo='',size='md',winner}){
-  const [err,setErr]=useState(false);
-  const sz={sm:'w-8 h-8 text-[9px]',md:'w-11 h-11 text-[10px]',lg:'w-14 h-14 text-xs'}[size];
-  const ini=name.split(' ').map(w=>w[0]).join('').slice(0,3).toUpperCase();
-  if (logo&&!err) return <img src={logo} alt={name} onError={()=>setErr(true)} className={`${sz} rounded-full object-contain bg-[#1b2025] border ${winner?'border-[#abcbda]/60':'border-[#42494f]/30'} p-1`}/>;
-  return <div className={`${sz} rounded-full bg-[#1b2025] border flex items-center justify-center font-mono font-bold flex-shrink-0 ${winner?'border-[#abcbda]/60 text-[#abcbda]':'border-[#42494f]/30 text-[#a6acb3]'}`}>{ini}</div>;
+function Avatar({name='',logo='',size='md',winner}) {
+  const [err,setErr] = useState(false);
+  const sz = {sm:'w-8 h-8 text-[9px]',md:'w-11 h-11 text-[10px]',lg:'w-14 h-14 text-xs'}[size];
+  const ini = name.split(' ').map(w=>w[0]).join('').slice(0,3).toUpperCase();
+  if (logo && !err) return <img src={logo} alt={name} onError={()=>setErr(true)} className={sz+' rounded-full object-contain bg-[#1b2025] border '+(winner?'border-[#abcbda]/60':'border-[#42494f]/30')+' p-1'}/>;
+  return <div className={sz+' rounded-full bg-[#1b2025] border flex items-center justify-center font-mono font-bold flex-shrink-0 '+(winner?'border-[#abcbda]/60 text-[#abcbda]':'border-[#42494f]/30 text-[#a6acb3]')}>{ini}</div>;
 }
-function Skeleton(){
+function Skeleton() {
   return <div className="bg-[#111416] rounded-lg p-6 border border-[#42494f]/10 mb-3">
     <div className="flex justify-between mb-5"><div className="skeleton h-3 w-40 rounded"/><div className="skeleton h-3 w-16 rounded"/></div>
     <div className="grid grid-cols-3 gap-2">
@@ -140,7 +252,7 @@ function Skeleton(){
     </div>
   </div>;
 }
-function RefreshBtn({countdown,loading,onRefresh}){
+function RefreshBtn({countdown,loading,onRefresh}) {
   const r=10,circ=2*Math.PI*r,pct=countdown/REFRESH_SECS;
   return <button onClick={onRefresh} disabled={loading} className="flex items-center gap-2 px-4 py-2 bg-[#161a1e] border border-[#42494f]/20 rounded-lg text-xs uppercase tracking-widest text-[#a6acb3] hover:border-[#abcbda]/30 hover:text-[#abcbda] transition-all btn-press disabled:opacity-40">
     <div className="relative w-5 h-5 flex-shrink-0">
@@ -148,62 +260,58 @@ function RefreshBtn({countdown,loading,onRefresh}){
         <circle cx="12" cy="12" r={r} fill="none" stroke="#42494f" strokeWidth="1.5"/>
         <circle cx="12" cy="12" r={r} fill="none" stroke="#abcbda" strokeWidth="1.5" strokeDasharray={circ} strokeDashoffset={circ*(1-pct)} strokeLinecap="round" style={{transition:'stroke-dashoffset 1s linear'}}/>
       </svg>
-      {!loading&&<span className="absolute inset-0 flex items-center justify-center text-[7px] font-mono text-[#abcbda]">{countdown}</span>}
-      {loading&&<span className="material-symbols-outlined text-[#abcbda] spin absolute inset-0 flex items-center justify-center" style={{fontSize:12}}>refresh</span>}
+      {!loading && <span className="absolute inset-0 flex items-center justify-center text-[7px] font-mono text-[#abcbda]">{countdown}</span>}
+      {loading && <span className="material-symbols-outlined text-[#abcbda] spin absolute inset-0 flex items-center justify-center" style={{fontSize:12}}>refresh</span>}
     </div>
     <span className={loading?'animate-pulse':''}>{loading?'Syncing…':'Refresh'}</span>
   </button>;
 }
 
 /* ─── SCORECARD MODAL ─── */
-function ScorecardModal({match,onClose}){
-  const [data,setData]=useState(null);
-  const [loading,setLoading]=useState(true);
-  const [err,setErr]=useState(null);
-
-  useEffect(()=>{
+function ScorecardModal({match,onClose}) {
+  const [data,setData] = useState(null);
+  const [loading,setLoading] = useState(true);
+  const [err,setErr] = useState(null);
+  useEffect(() => {
     if (!match) return;
     setLoading(true); setErr(null); setData(null);
-    const sport=sportOf(match);
-    const meta=match.external_meta||{};
-    let url='';
-
-    if (sport==='basketball') {
-      const rawId=(match.external_id||'').split('_').pop();
-      url=`${API_BASE}/scorecard/nba/${rawId}`;
-    } else if (sport==='hockey') {
-      const rawId=(match.external_id||'').split('_').pop();
-      url=`${API_BASE}/scorecard/nhl/${rawId}`;
-    } else if (sport==='cricket') {
-      const cid=meta.cricApiId||(match.external_id||'').replace('cric_match_','');
-      url=`${API_BASE}/scorecard/cricket/${cid}`;
+    const sport = sportOf(match);
+    const meta = match.external_meta || {};
+    let url = '';
+    if (sport === 'basketball') {
+      url = API_BASE+'/scorecard/nba/'+(match.external_id||'').split('_').pop();
+    } else if (sport === 'hockey') {
+      url = API_BASE+'/scorecard/nhl/'+(match.external_id||'').split('_').pop();
+    } else if (sport === 'cricket') {
+      url = API_BASE+'/scorecard/cricket/'+(meta.cricApiId||(match.external_id||'').replace('cric_match_',''));
     } else {
-      const rawId=(match.external_id||'').split('_').pop();
-      const lg=(match.league==='UCL')?'ucl':'epl';
-      url=`${API_BASE}/scorecard/soccer/${rawId}?league=${lg}`;
+      const extId = match.external_id || '';
+      if (extId.startsWith('fd_m_')) {
+        url = API_BASE+'/scorecard/soccer-fd/'+extId.replace('fd_m_','');
+      } else {
+        const rawId = extId.split('_').pop();
+        const lg = match.league==='UCL'?'ucl':'epl';
+        url = API_BASE+'/scorecard/soccer/'+rawId+'?league='+lg;
+      }
     }
-
     fetch(url).then(r=>r.json()).then(d=>{
-      if (d.success) setData(d.data);
-      else setErr(d.error||'Failed to load scorecard');
+      if (d.success) setData(d.data); else setErr(d.error||'Failed to load scorecard');
     }).catch(e=>setErr(e.message)).finally(()=>setLoading(false));
   },[match]);
-
   if (!match) return null;
-  const sport=sportOf(match);
-  const homeWin=match.winner_team===match.home_team;
-  const awayWin=match.winner_team===match.away_team;
-  const meta=match.external_meta||{};
-  const isScheduled=match.status==='scheduled';
-
+  const sport = sportOf(match);
+  const homeWin = match.winner_team===match.home_team;
+  const awayWin = match.winner_team===match.away_team;
+  const meta = match.external_meta||{};
+  const isSched = match.status==='scheduled';
   return <div className="modal-bg fixed inset-0 bg-black/70 backdrop-blur-sm z-[200] flex items-start justify-center p-4 overflow-y-auto" onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
     <div className="modal-box w-full max-w-4xl bg-[#111416] border border-[#42494f]/30 rounded-2xl my-8 relative">
       <div className="flex items-start justify-between p-6 border-b border-[#42494f]/15">
         <div>
           <div className="flex items-center gap-2 mb-2 flex-wrap">
             <Badge league={match.league}/>
-            <span className={`text-[10px] font-mono uppercase tracking-widest ${match.status==='live'?'text-red-400':isScheduled?'text-yellow-400':'text-[#70767d]'}`}>
-              {match.status==='live'?'● LIVE':isScheduled?'UPCOMING':sport==='football'||sport==='soccer'?'FT':'FINAL'}
+            <span className={'text-[10px] font-mono uppercase tracking-widest '+(match.status==='live'?'text-red-400':isSched?'text-yellow-400':'text-[#70767d]')}>
+              {match.status==='live'?'● LIVE':isSched?'UPCOMING':sport==='football'||sport==='soccer'?'FT':'FINAL'}
             </span>
             {match.venue&&<span className="text-[10px] text-[#42494f] font-mono">{match.venue}</span>}
           </div>
@@ -212,12 +320,12 @@ function ScorecardModal({match,onClose}){
             <span className="text-[#42494f] mx-3 font-extralight">vs</span>
             <span className={awayWin?'text-[#abcbda]':'text-[#e0e6ed]'}>{match.away_team}</span>
           </h2>
-          {!isScheduled&&match.home_score!=null&&<div className="mt-1 font-headline text-4xl font-extralight tracking-tighter">
+          {!isSched&&match.home_score!=null&&<div className="mt-1 font-headline text-4xl font-extralight tracking-tighter">
             <span className={homeWin?'text-[#abcbda]':''}>{match.home_score}</span>
             <span className="text-[#42494f] mx-2">—</span>
             <span className={awayWin?'text-[#abcbda]':''}>{match.away_score}</span>
           </div>}
-          {isScheduled&&match.match_date&&<div className="mt-1 text-sm text-[#70767d] font-mono">{fmtDate(match.match_date)}</div>}
+          {isSched&&match.match_date&&<div className="mt-1 text-sm text-[#70767d] font-mono">{fmtDate(match.match_date)}</div>}
           {sport==='cricket'&&meta&&<div className="mt-1 font-mono text-sm text-[#a6acb3]">
             {meta.inn1&&<div>{match.home_team}: {meta.inn1}</div>}
             {meta.inn2&&<div>{match.away_team}: {meta.inn2}</div>}
@@ -229,12 +337,12 @@ function ScorecardModal({match,onClose}){
         </button>
       </div>
       <div className="p-6">
-        {isScheduled&&<div className="text-center py-8 text-[#a6acb3]">
+        {isSched&&<div className="text-center py-8 text-[#a6acb3]">
           <span className="material-symbols-outlined block opacity-30 mb-3" style={{fontSize:48}}>schedule</span>
           <p className="text-sm">Match hasn't started yet</p>
           <p className="text-xs text-[#42494f] mt-1">{fmtDate(match.match_date)}</p>
         </div>}
-        {!isScheduled&&<>
+        {!isSched&&<>
           {loading&&<div className="flex items-center justify-center gap-3 py-12">
             <div className="spin w-6 h-6 border-2 border-[#42494f] border-t-[#abcbda] rounded-full"/>
             <span className="text-[#a6acb3] text-sm">Fetching live scorecard…</span>
@@ -255,24 +363,24 @@ function ScorecardModal({match,onClose}){
   </div>;
 }
 
-function TabRow({tabs,active,onChange}){
+function TabRow({tabs,active,onChange}) {
   return <div className="flex gap-1 mb-4 border-b border-[#42494f]/15 overflow-x-auto">
-    {tabs.map(([id,label])=>(
-      <button key={id} onClick={()=>onChange(id)} className={`px-4 py-2 text-[11px] uppercase tracking-widest font-mono whitespace-nowrap transition-all btn-press border-b-2 -mb-px ${active===id?'border-[#abcbda] text-[#abcbda]':'border-transparent text-[#70767d] hover:text-[#a6acb3]'}`}>{label}</button>
+    {tabs.map(([id,label]) => (
+      <button key={id} onClick={()=>onChange(id)} className={'px-4 py-2 text-[11px] uppercase tracking-widest font-mono whitespace-nowrap transition-all btn-press border-b-2 -mb-px '+(active===id?'border-[#abcbda] text-[#abcbda]':'border-transparent text-[#70767d] hover:text-[#a6acb3]')}>{label}</button>
     ))}
   </div>;
 }
 
 /* ─── NBA SCORECARD ─── */
-function NBAScorecard({data}){
-  const [tab,setTab]=useState('box');
-  const {quarters=[],players=[],teamStats=[],plays=[],leaders=[]}=data;
+function NBAScorecard({data}) {
+  const [tab,setTab] = useState('box');
+  const {quarters=[],players=[],teamStats=[],plays=[]} = data;
   return <>
     <TabRow tabs={[['box','Box Score'],['plays','Play-by-Play'],['stats','Team Stats']]} active={tab} onChange={setTab}/>
     {tab==='box'&&<>
       {quarters.length>0&&<div className="mb-5 overflow-x-auto">
         <table className="w-full border-collapse">
-          <thead><tr><th className="text-left">Team</th>{quarters[0]?.linescores?.map((_,i)=><th key={i}>Q{i+1}</th>)}<th>T</th></tr></thead>
+          <thead><tr><th className="text-left">Team</th>{(quarters[0]&&quarters[0].linescores||[]).map((_,i)=><th key={i}>Q{i+1}</th>)}<th>T</th></tr></thead>
           <tbody>{quarters.map((t,i)=><tr key={i}><td className="font-mono text-xs font-bold" style={{color:'#abcbda'}}>{t.team}</td>{t.linescores.map((s,j)=><td key={j}>{s||0}</td>)}<td className="hi">{t.total}</td></tr>)}</tbody>
         </table>
       </div>}
@@ -300,10 +408,10 @@ function NBAScorecard({data}){
     {tab==='plays'&&<div className="max-h-[480px] overflow-y-auto">
       <table className="w-full border-collapse">
         <thead><tr><th>Qtr</th><th>Clock</th><th className="text-left" style={{minWidth:280}}>Play</th><th>Score</th></tr></thead>
-        <tbody>{plays.map((p,i)=><tr key={i} className={`play-row ${p.isScoring?'bg-[#abcbda]/5':''}`}>
+        <tbody>{plays.map((p,i)=><tr key={i} className={'play-row '+(p.isScoring?'bg-[#abcbda]/5':'')}>
           <td className="dim">Q{p.period}</td><td className="font-mono text-[11px]">{p.clock}</td>
-          <td className={`text-left text-xs ${p.isScoring?'text-[#abcbda] font-medium':'text-[#a6acb3]'}`} style={{textAlign:'left'}}>{p.text}</td>
-          <td className="font-mono text-[11px]">{p.homeScore!=null?`${p.homeScore}-${p.awayScore}`:''}</td>
+          <td className={'text-left text-xs '+(p.isScoring?'text-[#abcbda] font-medium':'text-[#a6acb3]')} style={{textAlign:'left'}}>{p.text}</td>
+          <td className="font-mono text-[11px]">{p.homeScore!=null?p.homeScore+'-'+p.awayScore:''}</td>
         </tr>)}</tbody>
       </table>
       {plays.length===0&&<div className="text-center text-[#a6acb3] py-8 text-sm">Play-by-play not yet available</div>}
@@ -321,9 +429,9 @@ function NBAScorecard({data}){
 }
 
 /* ─── NHL SCORECARD ─── */
-function NHLScorecard({data}){
-  const [tab,setTab]=useState('goals');
-  const {periods=[],home={},away={},goals=[],shotsByPeriod=[]}=data;
+function NHLScorecard({data}) {
+  const [tab,setTab] = useState('goals');
+  const {periods=[],home={},away={},goals=[],shotsByPeriod=[]} = data;
   return <>
     {periods.length>0&&<div className="mb-5 overflow-x-auto">
       <table className="w-full border-collapse">
@@ -339,7 +447,7 @@ function NHLScorecard({data}){
       {goals.length===0&&<div className="text-center text-[#a6acb3] py-8 text-sm">No goals data available</div>}
       {goals.map((g,i)=><div key={i} className="flex items-start gap-4 p-3 border-b border-[#42494f]/12 hover:bg-[#161a1e] rounded">
         <span className="font-mono text-xs text-[#abcbda] min-w-[60px]">P{g.period} {g.time}</span>
-        <span className={`text-[10px] font-mono font-bold uppercase tracking-wider min-w-[32px] ${g.isHome?'text-[#38bdf8]':'text-[#f97316]'}`}>{g.isHome?(home.abbrev||'HOME'):(away.abbrev||'AWAY')}</span>
+        <span className={'text-[10px] font-mono font-bold uppercase tracking-wider min-w-[32px] '+(g.isHome?'text-[#38bdf8]':'text-[#f97316]')}>{g.isHome?(home.abbrev||'HOME'):(away.abbrev||'AWAY')}</span>
         <div className="flex-1">
           <div className="text-sm font-medium text-[#e0e6ed]">{g.scorer} <span className="text-[#70767d] text-xs">({g.type})</span></div>
           {(g.assist1||g.assist2)&&<div className="text-xs text-[#a6acb3] mt-0.5">Assists: {[g.assist1,g.assist2].filter(Boolean).join(', ')}</div>}
@@ -356,7 +464,7 @@ function NHLScorecard({data}){
     </div>}
   </>;
 }
-function SkaterTable({team={}}){
+function SkaterTable({team={}}) {
   return <>
     <div className="text-[10px] font-mono font-bold uppercase tracking-widest text-[#abcbda] mb-2">{team.team} — Skaters</div>
     <div className="overflow-x-auto mb-4">
@@ -370,7 +478,7 @@ function SkaterTable({team={}}){
         </tr>)}</tbody>
       </table>
     </div>
-    {team.goalies?.length>0&&<>
+    {team.goalies&&team.goalies.length>0&&<>
       <div className="text-[10px] font-mono font-bold uppercase tracking-widest text-[#abcbda] mb-2">{team.team} — Goalie</div>
       <div className="overflow-x-auto">
         <table className="w-full border-collapse">
@@ -387,10 +495,10 @@ function SkaterTable({team={}}){
 }
 
 /* ─── SOCCER SCORECARD ─── */
-function SoccerScorecard({data,home,away}){
-  const [tab,setTab]=useState('stats');
-  const {teamStats=[],timeline=[],lineups=[],notes}=data;
-  const ST_LABELS={possession:'Possession %',shots:'Total Shots',shotsOnTarget:'Shots on Target',corners:'Corners',fouls:'Fouls',yellowCards:'Yellow Cards',redCards:'Red Cards',offsides:'Offsides',saves:'Saves',passes:'Passes',passAccuracy:'Pass Accuracy',xg:'xG'};
+function SoccerScorecard({data,home,away}) {
+  const [tab,setTab] = useState('stats');
+  const {teamStats=[],timeline=[],lineups=[],notes} = data;
+  const ST = {possession:'Possession %',shots:'Total Shots',shotsOnTarget:'Shots on Target',corners:'Corners',fouls:'Fouls',yellowCards:'Yellow Cards',redCards:'Red Cards',offsides:'Offsides',saves:'Saves',passes:'Passes',passAccuracy:'Pass Accuracy',xg:'xG'};
   return <>
     {notes&&<div className="text-xs font-mono text-[#abcbda] bg-[#abcbda]/8 border border-[#abcbda]/20 rounded px-3 py-2 mb-4">{notes}</div>}
     <TabRow tabs={[['stats','Match Stats'],['timeline','Timeline'],['lineup','Lineups']]} active={tab} onChange={setTab}/>
@@ -400,16 +508,16 @@ function SoccerScorecard({data,home,away}){
         <div className="text-center text-[10px] text-[#70767d] uppercase tracking-wider">Match Stats</div>
         <div className="flex items-center gap-2 justify-end"><span className="text-sm font-medium">{teamStats[1].abbrev}</span><Avatar name={teamStats[1].team} logo={teamStats[1].logo} size="sm"/></div>
       </div>}
-      {Object.keys(ST_LABELS).map(key=>{
-        const h=teamStats[0]?.stats?.[key]||{display:'-',value:0};
-        const a=teamStats[1]?.stats?.[key]||{display:'-',value:0};
+      {Object.keys(ST).map(key=>{
+        const h=(teamStats[0]&&teamStats[0].stats&&teamStats[0].stats[key])||{display:'-',value:0};
+        const a=(teamStats[1]&&teamStats[1].stats&&teamStats[1].stats[key])||{display:'-',value:0};
         const tot=(h.value||0)+(a.value||0);
         const hPct=tot>0?((h.value||0)/tot*100):50;
         return <div key={key} className="flex items-center gap-3 py-2 border-b border-[#42494f]/10">
           <span className="font-mono text-sm font-bold text-[#e0e6ed] w-12 text-right flex-shrink-0">{h.display}</span>
           <div className="flex-1 flex flex-col gap-1">
-            <div className="text-[10px] text-[#70767d] text-center uppercase tracking-wider">{ST_LABELS[key]}</div>
-            <div className="h-1.5 bg-[#20262c] rounded-full overflow-hidden"><div className="h-full bg-[#38bdf8] rounded-full" style={{width:`${hPct}%`}}/></div>
+            <div className="text-[10px] text-[#70767d] text-center uppercase tracking-wider">{ST[key]}</div>
+            <div className="h-1.5 bg-[#20262c] rounded-full overflow-hidden"><div className="h-full bg-[#38bdf8] rounded-full" style={{width:hPct+'%'}}/></div>
           </div>
           <span className="font-mono text-sm font-bold text-[#e0e6ed] w-12 flex-shrink-0">{a.display}</span>
         </div>;
@@ -417,10 +525,10 @@ function SoccerScorecard({data,home,away}){
     </div>}
     {tab==='timeline'&&<div className="max-h-[460px] overflow-y-auto">
       {timeline.length===0&&<div className="text-center text-[#a6acb3] py-8 text-sm">No timeline events</div>}
-      {timeline.map((e,i)=><div key={i} className={`flex items-start gap-3 p-3 border-b border-[#42494f]/10 rounded ${e.isGoal?'bg-[#4ade80]/5':''} play-row`}>
+      {timeline.map((e,i)=><div key={i} className={'flex items-start gap-3 p-3 border-b border-[#42494f]/10 rounded '+(e.isGoal?'bg-[#4ade80]/5':'')+' play-row'}>
         <span className="font-mono text-[11px] text-[#abcbda] min-w-[40px]">{e.minute}'</span>
         <span style={{fontSize:14}}>{e.isGoal?'⚽':e.isYellow?'🟨':e.isRed?'🟥':e.isSub?'🔄':'·'}</span>
-        <span className={`text-xs flex-1 leading-relaxed ${e.isGoal?'text-[#e0e6ed] font-medium':'text-[#a6acb3]'}`}>{e.text}</span>
+        <span className={'text-xs flex-1 leading-relaxed '+(e.isGoal?'text-[#e0e6ed] font-medium':'text-[#a6acb3]')}>{e.text}</span>
         {e.homeScore!=null&&<span className="font-mono text-[11px] text-[#70767d] flex-shrink-0">{e.homeScore}–{e.awayScore}</span>}
       </div>)}
     </div>}
@@ -439,14 +547,14 @@ function SoccerScorecard({data,home,away}){
 }
 
 /* ─── CRICKET SCORECARD ─── */
-function CricketScorecard({data}){
-  const [tab,setTab]=useState(0);
-  const {innings=[],status}=data;
-  const inn=innings[tab];
+function CricketScorecard({data}) {
+  const [tab,setTab] = useState(0);
+  const {innings=[],status} = data;
+  const inn = innings[tab];
   if (!inn) return <div className="text-center text-[#a6acb3] py-8 text-sm">No scorecard data available yet</div>;
   return <>
     {status&&<div className="text-xs text-[#4ade80] bg-[#4ade80]/10 border border-[#4ade80]/20 rounded px-3 py-2 mb-4 font-medium">{status}</div>}
-    <TabRow tabs={innings.map((inn,i)=>[String(i),inn.name||`Innings ${i+1}`])} active={String(tab)} onChange={v=>setTab(parseInt(v))}/>
+    <TabRow tabs={innings.map((inn,i)=>[String(i),inn.name||'Innings '+(i+1)])} active={String(tab)} onChange={v=>setTab(parseInt(v))}/>
     <div className="mb-4 font-mono text-xl font-bold text-[#e0e6ed]">
       {inn.total.runs}<span className="text-[#70767d]">/{inn.total.wickets}</span>
       <span className="text-[#a6acb3] text-sm font-normal ml-3">({inn.total.overs} ov)</span>
@@ -483,26 +591,39 @@ function CricketScorecard({data}){
 }
 
 /* ─── MATCH CARD ─── */
-function MatchCard({match,idx,onOpen}){
-  const sport=sportOf(match);
-  const homeWin=match.winner_team===match.home_team;
-  const awayWin=match.winner_team===match.away_team;
-  const meta=match.external_meta||{};
-  const isLive=match.status==='live';
-  const isScheduled=match.status==='scheduled';
-  const lc=LC[match.league]||'#abcbda';
+function MatchCard({match,idx,onOpen,espnScores}) {
+  const [showWatch,setShowWatch] = useState(false);
+  const sport       = sportOf(match);
+  const homeWin     = match.winner_team===match.home_team;
+  const awayWin     = match.winner_team===match.away_team;
+  const meta        = match.external_meta||{};
+  const isLive      = match.status==='live';
+  const isScheduled = match.status==='scheduled';
+  const lc          = LC[match.league]||'#abcbda';
+  const watchLinks  = WATCH_LINKS[match.league]||[];
+  const finLabel    = sport==='football'||sport==='soccer'?'FT':sport==='cricket'?'RESULT':'FINAL';
 
-  // Status badge config
+  /* ESPN live score fallback */
+  const espn       = isLive ? lookupESPN(espnScores, match) : null;
+  const homeScore  = match.home_score!=null ? match.home_score : (espn ? espn.home_score : null);
+  const awayScore  = match.away_score!=null ? match.away_score : (espn ? espn.away_score : null);
+  const hasScore   = homeScore!=null && awayScore!=null;
+  const clockStr   = espn&&espn.clock
+    ? (sport==='basketball'||sport==='hockey' ? 'Q'+espn.period+' '+espn.clock : espn.clock+"'")
+    : null;
+
   const statusBadge = isLive
-    ? {cls:'bg-red-500/15 text-red-400 border border-red-500/30', label:'● LIVE'}
+    ? {cls:'bg-red-500/15 text-red-400 border border-red-500/30',label:'● LIVE'}
     : isScheduled
-    ? {cls:'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20', label:'UPCOMING'}
-    : {cls:'bg-[#20262c]/60 text-[#979fa5]',label:sport==='football'||sport==='soccer'?'FT':sport==='cricket'?'RESULT':'FINAL'};
+    ? {cls:'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20',label:'⏰ UPCOMING'}
+    : {cls:'bg-[#20262c]/60 text-[#979fa5]',label:finLabel};
 
-  return <div className="bg-[#111416] rounded-lg group relative overflow-hidden border border-transparent hover:border-[#abcbda]/20 card-lift fade-in cursor-pointer" style={{animationDelay:`${idx*60}ms`}} onClick={()=>onOpen(match)}>
+  return <div className="bg-[#111416] rounded-lg group relative overflow-hidden border border-transparent hover:border-[#abcbda]/20 card-lift fade-in" style={{animationDelay:idx*60+'ms'}}>
     <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg" style={{background:lc,opacity:.7}}/>
     {isLive&&<div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-red-500/60 to-transparent"/>}
-    <div className="p-5 pl-6">
+
+    {/* Main click area → scorecard */}
+    <div className="p-5 pl-6 cursor-pointer" onClick={()=>onOpen(match)}>
       <div className="flex justify-between items-center mb-4">
         <div className="flex items-center gap-2 flex-wrap">
           {isLive
@@ -512,21 +633,22 @@ function MatchCard({match,idx,onOpen}){
           <Badge league={match.league}/>
           {match.venue&&<span className="text-[10px] text-[#42494f] hidden md:inline">{match.venue}</span>}
         </div>
-        <span className={`font-mono text-[10px] uppercase tracking-widest px-2 py-0.5 rounded ${statusBadge.cls}`}>
-          {statusBadge.label}
-        </span>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {isLive&&clockStr&&<span className="font-mono text-[10px] text-red-400 animate-pulse">{clockStr}</span>}
+          <span className={'font-mono text-[10px] uppercase tracking-widest px-2 py-0.5 rounded '+statusBadge.cls}>{statusBadge.label}</span>
+        </div>
       </div>
 
       <div className="grid grid-cols-3 items-center gap-2">
         <div className="flex flex-col items-start gap-2">
           <Avatar name={match.home_team} logo={match.home_logo||''} size="md" winner={homeWin}/>
           <div>
-            <span className={`font-headline text-lg font-light tracking-tight block ${homeWin?'text-[#abcbda]':'text-[#e0e6ed]'}`} style={{fontFamily:'Manrope'}}>{match.home_team}</span>
+            <span className={'font-headline text-lg font-light tracking-tight block '+(homeWin?'text-[#abcbda]':'text-[#e0e6ed]')} style={{fontFamily:'Manrope'}}>{match.home_team}</span>
             {homeWin&&<span className="text-[9px] text-[#abcbda] uppercase tracking-widest">Winner ✦</span>}
           </div>
         </div>
 
-        <div className="flex flex-col items-center">
+        <div className="flex flex-col items-center gap-1">
           {sport==='cricket'
             ? <div className="text-center">
                 {meta.inn1&&<div className="font-mono text-sm text-[#e0e6ed]">{meta.inn1}</div>}
@@ -534,14 +656,19 @@ function MatchCard({match,idx,onOpen}){
                 {!meta.inn1&&<div className="font-mono text-[#70767d] text-sm">{isScheduled?fmtDate(match.match_date):'TBD'}</div>}
               </div>
             : isScheduled
-            ? <div className="text-center">
-                <div className="font-mono text-[#70767d] text-xs">{fmtDate(match.match_date)}</div>
-              </div>
+            ? <div className="text-center"><div className="font-mono text-[#70767d] text-xs">{fmtDate(match.match_date)}</div></div>
             : <div className="flex flex-col items-center gap-1">
                 <span className="font-headline text-3xl md:text-4xl font-extralight tracking-tighter text-[#abcbda] tabular-nums" style={{fontFamily:'Manrope'}}>
-                  {match.home_score??'–'}<span className="text-[#42494f] mx-1">—</span>{match.away_score??'–'}
+                  {hasScore
+                    ? <>{homeScore}<span className="text-[#42494f] mx-1">—</span>{awayScore}</>
+                    : isLive
+                    ? <span className="text-2xl text-red-400/60 animate-pulse">· · ·</span>
+                    : <>–<span className="text-[#42494f] mx-1">—</span>–</>
+                  }
                 </span>
-                {match.match_date&&<div className="font-mono text-[#42494f] text-[10px]">{fmtDate(match.match_date)}</div>}
+                {isLive&&hasScore&&espn&&<div className="text-[9px] text-red-400/50 font-mono">ESPN live</div>}
+                {isLive&&!hasScore&&<div className="text-[9px] text-[#42494f] font-mono animate-pulse">fetching score…</div>}
+                {!isLive&&match.match_date&&<div className="font-mono text-[#42494f] text-[10px]">{fmtDate(match.match_date)}</div>}
               </div>
           }
         </div>
@@ -549,7 +676,7 @@ function MatchCard({match,idx,onOpen}){
         <div className="flex flex-col items-end gap-2">
           <Avatar name={match.away_team} logo={match.away_logo||''} size="md" winner={awayWin}/>
           <div className="text-right">
-            <span className={`font-headline text-lg font-light tracking-tight block ${awayWin?'text-[#abcbda]':'text-[#e0e6ed]'}`} style={{fontFamily:'Manrope'}}>{match.away_team}</span>
+            <span className={'font-headline text-lg font-light tracking-tight block '+(awayWin?'text-[#abcbda]':'text-[#e0e6ed]')} style={{fontFamily:'Manrope'}}>{match.away_team}</span>
             {awayWin&&<span className="text-[9px] text-[#abcbda] uppercase tracking-widest">Winner ✦</span>}
           </div>
         </div>
@@ -562,24 +689,48 @@ function MatchCard({match,idx,onOpen}){
         </div>
         <div className="flex items-center gap-1.5 text-[10px] text-[#42494f] hover:text-[#abcbda] transition-colors">
           <span className="material-symbols-outlined" style={{fontSize:14}}>open_in_full</span>
-          <span className="hidden md:inline uppercase tracking-widest font-mono">{isScheduled?'Match Details':'Full Scorecard'}</span>
+          <span className="hidden md:inline uppercase tracking-widest font-mono">{isScheduled?'Details':'Scorecard'}</span>
         </div>
       </div>
     </div>
+
+    {/* Where to Watch toggle */}
+    {watchLinks.length>0&&<div className="px-6 pb-4 -mt-1" onClick={e=>e.stopPropagation()}>
+      <button
+        onClick={()=>setShowWatch(w=>!w)}
+        className={'flex items-center gap-1.5 text-[10px] uppercase tracking-widest font-mono px-3 py-1.5 rounded-full border transition-all btn-press '+(showWatch?'bg-[#abcbda]/10 border-[#abcbda]/30 text-[#abcbda]':'border-[#42494f]/30 text-[#70767d] hover:border-[#abcbda]/30 hover:text-[#abcbda]')}>
+        <span className="material-symbols-outlined" style={{fontSize:12}}>play_circle</span>
+        {showWatch?'Hide':'Where to Watch'}
+      </button>
+      {showWatch&&<div className="mt-3 fade-in">
+        <div className="text-[9px] font-mono uppercase tracking-widest text-[#70767d] mb-2">Stream {match.league} on</div>
+        <div className="flex flex-wrap gap-2">
+          {watchLinks.map((link,i)=>(
+            <a key={i} href={link.url} target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-medium border transition-all hover:scale-105 active:scale-95"
+              style={{borderColor:link.color+'40',background:link.color+'12',color:link.color}}>
+              <span>{link.icon}</span>{link.name}
+              <span className="material-symbols-outlined opacity-60" style={{fontSize:10}}>open_in_new</span>
+            </a>
+          ))}
+        </div>
+        {isLive&&<div className="mt-2 text-[9px] text-red-400 font-mono animate-pulse">🔴 Match is LIVE — stream now</div>}
+        {isScheduled&&<div className="mt-2 text-[9px] text-[#70767d] font-mono">⏰ Kicks off {fmtDate(match.match_date)}</div>}
+      </div>}
+    </div>}
   </div>;
 }
 
-function Stat({label,val}){
+function Stat({label,val}) {
   return <div><div className="text-[9px] text-[#a6acb3] uppercase tracking-widest">{label}</div><div className="text-[11px] text-[#e0e6ed] font-mono">{val}</div></div>;
 }
 
 /* ─── UPCOMING FIXTURE ─── */
-function FixtureRow({f,idx}){
+function FixtureRow({f,idx}) {
   const lc=LC[f.league]||'#abcbda';
   const hProb=f.home_win_prob,aProb=f.away_win_prob,dProb=f.draw_prob;
-  const dt=new Date(f.match_date);
-  const timeStr=dt.toLocaleString('en-IN',{timeZone:'Asia/Kolkata',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})+' IST';
-  return <div className="bg-[#111416] rounded-lg p-4 border border-transparent hover:border-[#abcbda]/15 transition-all fade-in" style={{animationDelay:`${idx*50}ms`}}>
+  const timeStr=fmtDate(f.match_date);
+  return <div className="bg-[#111416] rounded-lg p-4 border border-transparent hover:border-[#abcbda]/15 transition-all fade-in" style={{animationDelay:idx*50+'ms'}}>
     <div className="flex items-center gap-4">
       <div className="flex items-center gap-2 min-w-0 flex-1"><Avatar name={f.home_team} logo={f.home_logo||''} size="sm"/><span className="text-sm font-medium text-[#e0e6ed] truncate" style={{fontFamily:'Manrope'}}>{f.home_team}</span></div>
       <div className="text-center flex-shrink-0"><div className="text-[10px] text-[#70767d] uppercase tracking-wider mb-0.5">{timeStr}</div><Badge league={f.league}/></div>
@@ -592,85 +743,99 @@ function FixtureRow({f,idx}){
         <span>{f.away_abbr||f.away_team} {Math.round(aProb||0)}%</span>
       </div>
       <div className="h-1.5 bg-[#20262c] rounded-full overflow-hidden flex">
-        <div className="h-full rounded-l-full" style={{background:lc,width:`${hProb||0}%`,opacity:.8}}/>
-        {dProb&&<div className="h-full bg-[#42494f]" style={{width:`${dProb}%`}}/>}
-        <div className="h-full rounded-r-full bg-[#a6acb3]" style={{width:`${aProb||0}%`,opacity:.5}}/>
+        <div className="h-full rounded-l-full" style={{background:lc,width:(hProb||0)+'%',opacity:.8}}/>
+        {dProb&&<div className="h-full bg-[#42494f]" style={{width:dProb+'%'}}/>}
+        <div className="h-full rounded-r-full bg-[#a6acb3]" style={{width:(aProb||0)+'%',opacity:.5}}/>
       </div>
     </div>}
   </div>;
 }
 
 /* ─── MAIN APP ─── */
-function App(){
-  const [tab,setTab]=useState('scores');
-  const [league,setLeague]=useState('All');
-  const [sidebar,setSidebar]=useState(false);
-  const [countdown,setCountdown]=useState(REFRESH_SECS);
-  const [loading,setLoading]=useState(true);
-  const [lastSync,setLastSync]=useState(new Date());
-  const [backendOK,setBackendOK]=useState(false);
-  const [wsConn,setWsConn]=useState(false);
-  const [scores,setScores]=useState([]);
-  const [upcoming,setUpcoming]=useState([]);
-  const [liveN,setLiveN]=useState(0);
-  const [modal,setModal]=useState(null);
-  const socketRef=useRef(null);
+function App() {
+  const [tab,       setTab]        = useState('scores');
+  const [league,    setLeague]     = useState('All');
+  const [sidebar,   setSidebar]    = useState(false);
+  const [countdown, setCountdown]  = useState(REFRESH_SECS);
+  const [loading,   setLoading]    = useState(true);
+  const [lastSync,  setLastSync]   = useState(new Date());
+  const [backendOK, setBackendOK]  = useState(false);
+  const [wsConn,    setWsConn]     = useState(false);
+  const [scores,    setScores]     = useState([]);
+  const [upcoming,  setUpcoming]   = useState([]);
+  const [liveN,     setLiveN]      = useState(0);
+  const [modal,     setModal]      = useState(null);
+  const [espnScores,setEspnScores] = useState({});
+  const socketRef = useRef(null);
 
-  const fetchScores=useCallback(async()=>{
+  /* Poll ESPN every 30s for live scores */
+  useEffect(() => {
+    const run = () => fetchESPNScores().then(m => setEspnScores(m)).catch(()=>{});
+    run();
+    const t = setInterval(run, 30000);
+    return () => clearInterval(t);
+  }, []);
+
+  const fetchScores = useCallback(async () => {
     try {
-      const r=await fetch(`${API_BASE}/scores?league=${league}&limit=100`);
+      const r = await fetch(API_BASE+'/scores?league='+league+'&limit=100');
       if (!r.ok) throw new Error(r.status);
-      const d=await r.json();
-      if (d.success){ setScores(d.data); setLiveN(d.data.filter(m=>m.status==='live').length); }
+      const d = await r.json();
+      if (d.success) { setScores(d.data); setLiveN(d.data.filter(m=>m.status==='live').length); }
       setBackendOK(true);
-    } catch(e){ setBackendOK(false); toast('Backend offline — start with npm start','error',5000); }
-  },[league]);
+    } catch(e) { setBackendOK(false); toast('Backend offline — start with npm start','error',5000); }
+  }, [league]);
 
-  const fetchUpcoming=useCallback(async()=>{
+  const fetchUpcoming = useCallback(async () => {
     try {
-      const r=await fetch(`${API_BASE}/upcoming?league=${league}&limit=60`);
+      const r = await fetch(API_BASE+'/upcoming?league='+league+'&limit=60');
       if (!r.ok) throw new Error(r.status);
-      const d=await r.json();
+      const d = await r.json();
       if (d.success) setUpcoming(d.data);
-    } catch {}
-  },[league]);
+    } catch(e) {}
+  }, [league]);
 
-  const doRefresh=useCallback(async(showToast=true)=>{
+  const doRefresh = useCallback(async (showToast=true) => {
     setLoading(true);
-    fetch(`${API_BASE}/sync`,{method:'POST'}).catch(()=>{});
+    fetch(API_BASE+'/sync',{method:'POST'}).catch(()=>{});
     await Promise.all([fetchScores(),fetchUpcoming()]);
     setLastSync(new Date());
     setLoading(false);
     if (showToast) toast('Data refreshed','success',2500);
-  },[fetchScores,fetchUpcoming]);
+  }, [fetchScores,fetchUpcoming]);
 
-  useEffect(()=>{
-    fetch(`${API_BASE}/health`,{signal:AbortSignal.timeout(3000)}).then(r=>{if(r.ok)setBackendOK(true);}).catch(()=>{});
+  useEffect(() => {
+    fetch(API_BASE+'/health',{signal:AbortSignal.timeout(3000)}).then(r=>{if(r.ok)setBackendOK(true);}).catch(()=>{});
     doRefresh(false);
-  },[]);
+  }, []);
 
-  useEffect(()=>{ if(tab==='scores') fetchScores(); else fetchUpcoming(); },[league,tab]);
+  useEffect(() => { if(tab==='scores') fetchScores(); else fetchUpcoming(); }, [league,tab]);
 
-  useEffect(()=>{
+  useEffect(() => {
     try {
-      const s=io(WS_URL,{transports:['websocket','polling'],timeout:5000});
-      socketRef.current=s;
-      s.on('connect',()=>{setWsConn(true);toast('Real-time connected','success',3000);});
-      s.on('disconnect',()=>setWsConn(false));
-      s.on('match_update',()=>{setLastSync(new Date());fetchScores();fetchUpcoming();toast('Live data updated','live',3000);});
+      const s = io(WS_URL,{transports:['websocket','polling'],timeout:5000});
+      socketRef.current = s;
+      s.on('connect',      ()=>{ setWsConn(true); toast('Real-time connected','success',3000); });
+      s.on('disconnect',   ()=>setWsConn(false));
+      s.on('match_update', ()=>{ setLastSync(new Date()); fetchScores(); fetchUpcoming(); toast('Live data updated','live',3000); });
       return ()=>s.disconnect();
-    } catch {}
-  },[]);
+    } catch(e) {}
+  }, []);
 
-  useEffect(()=>{
-    const t=setInterval(()=>setCountdown(p=>{
-      if(p<=1){doRefresh(false);return REFRESH_SECS;}
+  useEffect(() => {
+    const t = setInterval(()=>setCountdown(p=>{
+      if(p<=1){ doRefresh(false); return REFRESH_SECS; }
       return p-1;
     }),1000);
     return ()=>clearInterval(t);
-  },[doRefresh]);
+  }, [doRefresh]);
 
-  const TABS=[{id:'scores',label:'Scores',icon:'leaderboard'},{id:'upcoming',label:'Upcoming',icon:'event_note'},{id:'schema',label:'Schema',icon:'account_tree'},{id:'deploy',label:'Deploy',icon:'rocket_launch'}];
+  const TABS = [
+    {id:'scores',  label:'Scores',   icon:'leaderboard'},
+    {id:'upcoming',label:'Upcoming', icon:'event_note'},
+    {id:'schema',  label:'Schema',   icon:'account_tree'},
+    {id:'deploy',  label:'Deploy',   icon:'rocket_launch'},
+  ];
 
   return <div className="min-h-screen bg-[#0c0e10] text-[#e0e6ed]">
     <ToastContainer/>
@@ -688,7 +853,7 @@ function App(){
           </div>
         </div>
         <nav className="hidden md:flex items-center gap-1">
-          {TABS.map(t=><button key={t.id} onClick={()=>{setTab(t.id);setLeague('All');}} className={`px-4 py-2 text-xs uppercase tracking-widest transition-all rounded btn-press ${tab===t.id?'text-[#abcbda] bg-[#abcbda]/10 border border-[#abcbda]/20':'text-[#979fa5] hover:text-[#e0e6ed] hover:bg-[#20262c]/60'}`}>{t.label}</button>)}
+          {TABS.map(t=><button key={t.id} onClick={()=>{setTab(t.id);setLeague('All');}} className={'px-4 py-2 text-xs uppercase tracking-widest transition-all rounded btn-press '+(tab===t.id?'text-[#abcbda] bg-[#abcbda]/10 border border-[#abcbda]/20':'text-[#979fa5] hover:text-[#e0e6ed] hover:bg-[#20262c]/60')}>{t.label}</button>)}
         </nav>
         <div className="flex items-center gap-3">
           <div className="hidden sm:flex items-center gap-2">
@@ -719,7 +884,7 @@ function App(){
           </h1>
         </div>
         {(tab==='scores'||tab==='upcoming')&&<div className="flex gap-2 flex-wrap">
-          {LEAGUES.map(l=><button key={l} onClick={()=>setLeague(l)} className={`px-4 py-1.5 rounded-full border text-xs tracking-wider transition-all btn-press ${l===league?'border-[#abcbda] bg-[#abcbda]/10 text-[#abcbda]':'border-[#42494f]/30 text-[#979fa5] hover:border-[#abcbda]/40 hover:text-[#e0e6ed]'}`}>{l}</button>)}
+          {LEAGUES.map(l=><button key={l} onClick={()=>setLeague(l)} className={'px-4 py-1.5 rounded-full border text-xs tracking-wider transition-all btn-press '+(l===league?'border-[#abcbda] bg-[#abcbda]/10 text-[#abcbda]':'border-[#42494f]/30 text-[#979fa5] hover:border-[#abcbda]/40 hover:text-[#e0e6ed]')}>{l}</button>)}
         </div>}
       </div>
 
@@ -729,8 +894,8 @@ function App(){
             <strong>Backend offline.</strong> Start it with <code className="text-yellow-300 bg-yellow-900/30 px-1 rounded">cd backend &amp;&amp; npm start</code>, then refresh.
           </div>}
           {loading?[1,2,3].map(i=><Skeleton key={i}/>)
-            :scores.length===0?<EmptyState label={`No matches found${league!=='All'?` for ${league}`:''}`}/>
-            :<div className="space-y-3">{scores.map((m,i)=><MatchCard key={m.id} match={m} idx={i} onOpen={setModal}/>)}</div>}
+            :scores.length===0?<EmptyState label={'No matches found'+(league!=='All'?' for '+league:'')}/>
+            :<div className="space-y-3">{scores.map((m,i)=><MatchCard key={m.id} match={m} idx={i} onOpen={setModal} espnScores={espnScores}/>)}</div>}
         </>}
         {tab==='upcoming'&&<>
           {upcoming.length===0&&!loading&&<EmptyState label="No upcoming fixtures synced yet."/>}
@@ -749,7 +914,7 @@ function App(){
           <button className="p-2 hover:bg-[#20262c] rounded-full btn-press" onClick={()=>setSidebar(false)}><span className="material-symbols-outlined text-[#a6acb3]" style={{fontSize:18}}>close</span></button>
         </div>
         <nav className="flex-1 px-4 py-4 space-y-1">
-          {TABS.map(t=><button key={t.id} onClick={()=>{setTab(t.id);setLeague('All');setSidebar(false);}} className={`w-full flex items-center gap-4 px-4 py-3 rounded-lg transition-all btn-press ${tab===t.id?'bg-[#abcbda]/10 text-[#abcbda] border-l-2 border-[#abcbda]':'text-[#a6acb3] hover:bg-[#20262c]/40 hover:text-[#e0e6ed]'}`}>
+          {TABS.map(t=><button key={t.id} onClick={()=>{setTab(t.id);setLeague('All');setSidebar(false);}} className={'w-full flex items-center gap-4 px-4 py-3 rounded-lg transition-all btn-press '+(tab===t.id?'bg-[#abcbda]/10 text-[#abcbda] border-l-2 border-[#abcbda]':'text-[#a6acb3] hover:bg-[#20262c]/40 hover:text-[#e0e6ed]')}>
             <span className="material-symbols-outlined">{t.icon}</span><span className="text-xs uppercase tracking-widest">{t.label}</span>
           </button>)}
         </nav>
@@ -757,28 +922,28 @@ function App(){
     </>}
 
     <nav className="fixed bottom-0 left-0 w-full flex justify-around px-4 pb-6 pt-2 bg-[#111416]/95 backdrop-blur-sm z-50 border-t border-[#42494f]/15 md:hidden">
-      {TABS.map(t=><button key={t.id} onClick={()=>{setTab(t.id);setLeague('All');}} className={`flex flex-col items-center pt-2 transition-all btn-press ${tab===t.id?'text-[#abcbda] border-t-2 border-[#abcbda]':'text-[#979fa5]'}`}>
+      {TABS.map(t=><button key={t.id} onClick={()=>{setTab(t.id);setLeague('All');}} className={'flex flex-col items-center pt-2 transition-all btn-press '+(tab===t.id?'text-[#abcbda] border-t-2 border-[#abcbda]':'text-[#979fa5]')}>
         <span className="material-symbols-outlined mb-1">{t.icon}</span><span className="text-[9px] uppercase tracking-widest">{t.label}</span>
       </button>)}
     </nav>
   </div>;
 }
 
-function StatusPill({ok,label,color}){
-  const c=color==='blue'?'bg-blue-400':'bg-green-500';
+function StatusPill({ok,label,color}) {
+  const c = color==='blue'?'bg-blue-400':'bg-green-500';
   return <div className="flex items-center gap-1.5 px-2 py-1 bg-[#161a1e] rounded border border-[#42494f]/15">
-    <div className={`w-1.5 h-1.5 rounded-full ${ok?c:'bg-[#42494f]'}`}/>
+    <div className={'w-1.5 h-1.5 rounded-full '+(ok?c:'bg-[#42494f]')}/>
     <span className="text-[9px] font-mono text-[#a6acb3] uppercase tracking-widest">{label}</span>
   </div>;
 }
-function EmptyState({label}){
+function EmptyState({label}) {
   return <div className="text-center py-20 text-[#a6acb3]">
     <span className="material-symbols-outlined block opacity-20 mb-3" style={{fontSize:48}}>sports_score</span>
     <p className="text-sm">{label}</p>
   </div>;
 }
 
-function SchemaTab(){
+function SchemaTab() {
   const tables=[
     {name:'leagues',rows:'6+',cols:[{k:'PK',n:'id',t:'INT'},{k:'',n:'name',t:'VARCHAR(100)'},{k:'',n:'sport',t:'VARCHAR(50)'},{k:'',n:'external_id',t:'VARCHAR(50) UQ'}]},
     {name:'teams',rows:'50+',cols:[{k:'PK',n:'id',t:'INT'},{k:'FK',n:'league_id',t:'-> leagues'},{k:'',n:'name',t:'VARCHAR(100)'},{k:'',n:'logo_url',t:'TEXT'},{k:'',n:'external_id',t:'VARCHAR(100) UQ'}]},
@@ -795,7 +960,7 @@ function SchemaTab(){
       <table className="w-full border-collapse">
         <thead><tr><th>Key</th><th>Column</th><th>Type</th></tr></thead>
         <tbody>{t.cols.map((c,i)=><tr key={i}>
-          <td><span className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${c.k==='PK'?'bg-[#abcbda]/15 text-[#abcbda]':c.k==='FK'?'bg-[#818cf8]/15 text-[#818cf8]':'text-[#42494f]'}`}>{c.k||'—'}</span></td>
+          <td><span className={'text-[9px] font-mono px-1.5 py-0.5 rounded '+(c.k==='PK'?'bg-[#abcbda]/15 text-[#abcbda]':c.k==='FK'?'bg-[#818cf8]/15 text-[#818cf8]':'text-[#42494f]')}>{c.k||'—'}</span></td>
           <td><code className="text-[#e0e6ed] text-xs">{c.n}</code></td>
           <td><span className="text-[11px] text-[#70767d] font-mono">{c.t}</span></td>
         </tr>)}</tbody>
@@ -804,25 +969,25 @@ function SchemaTab(){
   </div>;
 }
 
-function DeployGuide(){
-  const [step,setStep]=useState(0);
+function DeployGuide() {
+  const [step,setStep] = useState(0);
   const steps=[
-    {icon:'dns',title:'Provision Server',desc:'Any Ubuntu 22+ VPS. DigitalOcean, Railway, Render, or local.',cmds:['sudo apt update && sudo apt install -y nodejs npm mysql-server','node -v  # must be >= 18']},
-    {icon:'storage',title:'Set Up MySQL',desc:'Create the database and run the schema.',cmds:['sudo mysql -u root','CREATE DATABASE sports_dashboard;','# then: Get-Content schema.sql | mysql -u root -p sports_dashboard']},
-    {icon:'key',title:'Configure .env',desc:'Fill in DB credentials and optional API keys.',cmds:['cp .env.example .env','notepad .env','# DB_USER, DB_PASSWORD, DB_NAME required','# CRICAPI_KEY from cricketdata.org (free, for IPL)']},
-    {icon:'upload',title:'Start Backend',desc:'Install and run.',cmds:['cd backend','npm install','npm start','# Visit: http://localhost:3001/api/health']},
+    {icon:'dns',   title:'Provision Server',desc:'Any Ubuntu 22+ VPS. DigitalOcean, Railway, Render, or local.',cmds:['sudo apt update && sudo apt install -y nodejs npm mysql-server','node -v  # must be >= 18']},
+    {icon:'storage',title:'Set Up MySQL',   desc:'Create the database and run the schema.',cmds:['sudo mysql -u root','CREATE DATABASE sports_dashboard;','# then: Get-Content schema.sql | mysql -u root -p sports_dashboard']},
+    {icon:'key',   title:'Configure .env',  desc:'Fill in DB credentials and optional API keys.',cmds:['cp .env.example .env','notepad .env','# DB_USER, DB_PASSWORD, DB_NAME required','# CRICAPI_KEY from cricketdata.org (free, for IPL)']},
+    {icon:'upload',title:'Start Backend',   desc:'Install and run.',cmds:['cd backend','npm install','npm start','# Visit: http://localhost:3001/api/health']},
   ];
   const s=steps[step];
   return <div className="space-y-8 fade-in">
     <div className="flex items-center">
       {steps.map((st,i)=><React.Fragment key={i}>
-        <button onClick={()=>setStep(i)} className={`flex flex-col items-center gap-2 px-2 btn-press ${i===step?'opacity-100':'opacity-40 hover:opacity-60'} transition-opacity`}>
-          <div className={`w-9 h-9 rounded-full border flex items-center justify-center ${i===step?'bg-[#abcbda]/15 border-[#abcbda] text-[#abcbda]':i<step?'bg-[#abcbda]/8 border-[#abcbda]/30 text-[#abcbda]/60':'border-[#42494f]/30 text-[#a6acb3]'}`}>
+        <button onClick={()=>setStep(i)} className={'flex flex-col items-center gap-2 px-2 btn-press '+(i===step?'opacity-100':'opacity-40 hover:opacity-60')+' transition-opacity'}>
+          <div className={'w-9 h-9 rounded-full border flex items-center justify-center '+(i===step?'bg-[#abcbda]/15 border-[#abcbda] text-[#abcbda]':i<step?'bg-[#abcbda]/8 border-[#abcbda]/30 text-[#abcbda]/60':'border-[#42494f]/30 text-[#a6acb3]')}>
             {i<step?<span className="material-symbols-outlined" style={{fontSize:16}}>check</span>:<span className="material-symbols-outlined" style={{fontSize:16}}>{st.icon}</span>}
           </div>
           <span className="text-[8px] uppercase tracking-widest text-[#a6acb3] hidden lg:block text-center max-w-[60px]">{st.title}</span>
         </button>
-        {i<steps.length-1&&<div className={`flex-1 h-[1px] ${i<step?'bg-[#abcbda]/40':'bg-[#42494f]/20'}`}/>}
+        {i<steps.length-1&&<div className={'flex-1 h-[1px] '+(i<step?'bg-[#abcbda]/40':'bg-[#42494f]/20')}/>}
       </React.Fragment>)}
     </div>
     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

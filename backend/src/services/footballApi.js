@@ -72,7 +72,9 @@ async function syncESPN(league) {
 
     const sn  = ev.status && ev.status.type ? ev.status.type.name : '';
     const st  = sn === 'STATUS_FINAL' ? 'completed' : sn === 'STATUS_IN_PROGRESS' ? 'live' : 'scheduled';
-    const dt  = ev.date ? ev.date.replace('T', ' ').replace('Z', '') : null;
+    // Store UTC datetime — strip T and Z, keep as UTC string for MySQL
+    const rawDate = ev.date || null;
+    const dt = rawDate ? rawDate.replace('T', ' ').replace('Z', '') : null;
     const ext = 'espn_soccer_' + ev.id;
     const probs = comp.predictor || null;
     const hProb = probs && probs.homeTeam ? probs.homeTeam.gameProjection : null;
@@ -86,10 +88,11 @@ async function syncESPN(league) {
     const rows = await db.query('SELECT id FROM matches WHERE external_id=?', [ext]);
     const m = rows[0];
 
-    if (st === 'completed') {
+    // Write scores for both live and completed matches
+    if (st === 'live' || st === 'completed') {
       const hs  = parseInt(home.score) || 0;
       const as_ = parseInt(away.score) || 0;
-      const wId = hs > as_ ? hId : as_ > hs ? aId : null;
+      const wId = st === 'completed' ? (hs > as_ ? hId : as_ > hs ? aId : null) : null;
       await db.query(
         'INSERT INTO results (match_id,home_score,away_score,winner_team_id) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE home_score=VALUES(home_score),away_score=VALUES(away_score),winner_team_id=VALUES(winner_team_id)',
         [m.id, hs, as_, wId]

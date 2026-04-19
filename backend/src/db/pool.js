@@ -15,6 +15,7 @@ function createPool() {
     queueLimit:         0,
     enableKeepAlive:    true,
     keepAliveInitialDelay: 10_000,
+    timezone:           'Z',   // treat all datetimes as UTC
   });
   pool.on('connection', () => log.info('[db] New pool connection established'));
   return pool;
