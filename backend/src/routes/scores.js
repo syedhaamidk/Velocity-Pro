@@ -48,7 +48,7 @@ router.get('/', async (req, res, next) => {
     } else if (status === 'completed') {
       sql += ' AND m.status = ?'; params.push('completed');
     } else {
-      sql += ' AND m.status IN (\'completed\',\'live\',\'scheduled\')';
+      sql += ' AND m.status IN (\'completed\',\'live\')';
     }
 
     if (league !== 'All') {
@@ -76,4 +76,5 @@ router.get('/', async (req, res, next) => {
 });
 
 module.exports = router;
+
 

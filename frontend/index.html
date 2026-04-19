@@ -74,12 +74,25 @@ const WS_URL = API_BASE.replace('/api','') || window.location.origin;
 const REFRESH_SECS = 90;
 const LEAGUES = ['All','NBA','EPL','UCL','IPL','NHL','T20','Serie A','Bundesliga','Ligue 1'];
 const LC = { NBA:'#f97316',IPL:'#22c55e',UCL:'#818cf8',EPL:'#38bdf8',NHL:'#22d3ee',NFL:'#dc2626',T20:'#22c55e','Serie A':'#facc15',Bundesliga:'#f97316','Ligue 1':'#f43f5e' };
+
 function sportOf(match) {
   if (match.sport) return match.sport;
   if (match.league === 'NBA') return 'basketball';
   if (match.league === 'NHL') return 'hockey';
   if (match.league === 'IPL') return 'cricket';
   return 'football';
+}
+
+function fmtDate(dateStr) {
+  const d = new Date(dateStr);
+  return d.toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true
+  }) + ' IST';
 }
 
 /* ─── TOAST ─── */
@@ -162,7 +175,6 @@ function ScorecardModal({match,onClose}){
       const rawId=(match.external_id||'').split('_').pop();
       url=`${API_BASE}/scorecard/nhl/${rawId}`;
     } else if (sport==='cricket') {
-      // IMPORTANT: use cricApiId from external_meta (UUID), not the DB id
       const cid=meta.cricApiId||(match.external_id||'').replace('cric_match_','');
       url=`${API_BASE}/scorecard/cricket/${cid}`;
     } else {
@@ -182,6 +194,7 @@ function ScorecardModal({match,onClose}){
   const homeWin=match.winner_team===match.home_team;
   const awayWin=match.winner_team===match.away_team;
   const meta=match.external_meta||{};
+  const isScheduled=match.status==='scheduled';
 
   return <div className="modal-bg fixed inset-0 bg-black/70 backdrop-blur-sm z-[200] flex items-start justify-center p-4 overflow-y-auto" onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
     <div className="modal-box w-full max-w-4xl bg-[#111416] border border-[#42494f]/30 rounded-2xl my-8 relative">
@@ -189,7 +202,9 @@ function ScorecardModal({match,onClose}){
         <div>
           <div className="flex items-center gap-2 mb-2 flex-wrap">
             <Badge league={match.league}/>
-            <span className="text-[10px] font-mono uppercase tracking-widest text-[#70767d]">{match.status==='live'?'● LIVE':'FINAL'}</span>
+            <span className={`text-[10px] font-mono uppercase tracking-widest ${match.status==='live'?'text-red-400':isScheduled?'text-yellow-400':'text-[#70767d]'}`}>
+              {match.status==='live'?'● LIVE':isScheduled?'UPCOMING':sport==='football'||sport==='soccer'?'FT':'FINAL'}
+            </span>
             {match.venue&&<span className="text-[10px] text-[#42494f] font-mono">{match.venue}</span>}
           </div>
           <h2 className="font-headline text-2xl font-light tracking-tight" style={{fontFamily:'Manrope'}}>
@@ -197,11 +212,12 @@ function ScorecardModal({match,onClose}){
             <span className="text-[#42494f] mx-3 font-extralight">vs</span>
             <span className={awayWin?'text-[#abcbda]':'text-[#e0e6ed]'}>{match.away_team}</span>
           </h2>
-          {match.home_score!=null&&<div className="mt-1 font-headline text-4xl font-extralight tracking-tighter">
+          {!isScheduled&&match.home_score!=null&&<div className="mt-1 font-headline text-4xl font-extralight tracking-tighter">
             <span className={homeWin?'text-[#abcbda]':''}>{match.home_score}</span>
             <span className="text-[#42494f] mx-2">—</span>
             <span className={awayWin?'text-[#abcbda]':''}>{match.away_score}</span>
           </div>}
+          {isScheduled&&match.match_date&&<div className="mt-1 text-sm text-[#70767d] font-mono">{fmtDate(match.match_date)}</div>}
           {sport==='cricket'&&meta&&<div className="mt-1 font-mono text-sm text-[#a6acb3]">
             {meta.inn1&&<div>{match.home_team}: {meta.inn1}</div>}
             {meta.inn2&&<div>{match.away_team}: {meta.inn2}</div>}
@@ -213,19 +229,26 @@ function ScorecardModal({match,onClose}){
         </button>
       </div>
       <div className="p-6">
-        {loading&&<div className="flex items-center justify-center gap-3 py-12">
-          <div className="spin w-6 h-6 border-2 border-[#42494f] border-t-[#abcbda] rounded-full"/>
-          <span className="text-[#a6acb3] text-sm">Fetching live scorecard…</span>
+        {isScheduled&&<div className="text-center py-8 text-[#a6acb3]">
+          <span className="material-symbols-outlined block opacity-30 mb-3" style={{fontSize:48}}>schedule</span>
+          <p className="text-sm">Match hasn't started yet</p>
+          <p className="text-xs text-[#42494f] mt-1">{fmtDate(match.match_date)}</p>
         </div>}
-        {err&&<div className="bg-[#ee7d77]/10 border border-[#ee7d77]/20 rounded-lg p-4 text-sm text-[#ee7d77]">
-          {err}
-          {sport==='cricket'&&<div className="mt-2 text-[#a6acb3] text-xs">Add your free key at cricketdata.org → <code className="text-[#abcbda]">.env: CRICAPI_KEY=yourkey</code> → restart backend</div>}
-        </div>}
-        {data&&!loading&&<>
-          {sport==='basketball'&&<NBAScorecard data={data}/>}
-          {sport==='hockey'&&<NHLScorecard data={data}/>}
-          {(sport==='football'||sport==='soccer')&&<SoccerScorecard data={data} home={match.home_team} away={match.away_team}/>}
-          {sport==='cricket'&&<CricketScorecard data={data}/>}
+        {!isScheduled&&<>
+          {loading&&<div className="flex items-center justify-center gap-3 py-12">
+            <div className="spin w-6 h-6 border-2 border-[#42494f] border-t-[#abcbda] rounded-full"/>
+            <span className="text-[#a6acb3] text-sm">Fetching live scorecard…</span>
+          </div>}
+          {err&&<div className="bg-[#ee7d77]/10 border border-[#ee7d77]/20 rounded-lg p-4 text-sm text-[#ee7d77]">
+            {err}
+            {sport==='cricket'&&<div className="mt-2 text-[#a6acb3] text-xs">Add your free key at cricketdata.org → <code className="text-[#abcbda]">.env: CRICAPI_KEY=yourkey</code> → restart backend</div>}
+          </div>}
+          {data&&!loading&&<>
+            {sport==='basketball'&&<NBAScorecard data={data}/>}
+            {sport==='hockey'&&<NHLScorecard data={data}/>}
+            {(sport==='football'||sport==='soccer')&&<SoccerScorecard data={data} home={match.home_team} away={match.away_team}/>}
+            {sport==='cricket'&&<CricketScorecard data={data}/>}
+          </>}
         </>}
       </div>
     </div>
@@ -466,22 +489,34 @@ function MatchCard({match,idx,onOpen}){
   const awayWin=match.winner_team===match.away_team;
   const meta=match.external_meta||{};
   const isLive=match.status==='live';
+  const isScheduled=match.status==='scheduled';
   const lc=LC[match.league]||'#abcbda';
+
+  // Status badge config
+  const statusBadge = isLive
+    ? {cls:'bg-red-500/15 text-red-400 border border-red-500/30', label:'● LIVE'}
+    : isScheduled
+    ? {cls:'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20', label:'UPCOMING'}
+    : {cls:'bg-[#20262c]/60 text-[#979fa5]',label:sport==='football'||sport==='soccer'?'FT':sport==='cricket'?'RESULT':'FINAL'};
+
   return <div className="bg-[#111416] rounded-lg group relative overflow-hidden border border-transparent hover:border-[#abcbda]/20 card-lift fade-in cursor-pointer" style={{animationDelay:`${idx*60}ms`}} onClick={()=>onOpen(match)}>
     <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg" style={{background:lc,opacity:.7}}/>
     {isLive&&<div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-red-500/60 to-transparent"/>}
     <div className="p-5 pl-6">
       <div className="flex justify-between items-center mb-4">
         <div className="flex items-center gap-2 flex-wrap">
-          {isLive?<span className="w-2 h-2 rounded-full bg-red-400 live-glow flex-shrink-0"/>:<span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{background:lc,opacity:.4}}/>}
+          {isLive
+            ? <span className="w-2 h-2 rounded-full bg-red-400 live-glow flex-shrink-0"/>
+            : <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{background:lc,opacity:.4}}/>}
           <span className="font-mono text-[10px] uppercase tracking-widest text-[#a6acb3]">{match.league} · {match.sport||sport}</span>
           <Badge league={match.league}/>
           {match.venue&&<span className="text-[10px] text-[#42494f] hidden md:inline">{match.venue}</span>}
         </div>
-        <span className={`font-mono text-[10px] uppercase tracking-widest px-2 py-0.5 rounded ${isLive?'bg-red-500/15 text-red-400 border border-red-500/30':'bg-[#20262c]/60 text-[#979fa5]'}`}>
-          {isLive?'● LIVE':'FINAL'}
+        <span className={`font-mono text-[10px] uppercase tracking-widest px-2 py-0.5 rounded ${statusBadge.cls}`}>
+          {statusBadge.label}
         </span>
       </div>
+
       <div className="grid grid-cols-3 items-center gap-2">
         <div className="flex flex-col items-start gap-2">
           <Avatar name={match.home_team} logo={match.home_logo||''} size="md" winner={homeWin}/>
@@ -490,18 +525,27 @@ function MatchCard({match,idx,onOpen}){
             {homeWin&&<span className="text-[9px] text-[#abcbda] uppercase tracking-widest">Winner ✦</span>}
           </div>
         </div>
+
         <div className="flex flex-col items-center">
           {sport==='cricket'
-            ?<div className="text-center">
+            ? <div className="text-center">
                 {meta.inn1&&<div className="font-mono text-sm text-[#e0e6ed]">{meta.inn1}</div>}
                 {meta.inn2&&<div className="font-mono text-sm text-[#a6acb3]">{meta.inn2}</div>}
-                {!meta.inn1&&<div className="font-mono text-[#70767d] text-sm">TBD</div>}
+                {!meta.inn1&&<div className="font-mono text-[#70767d] text-sm">{isScheduled?fmtDate(match.match_date):'TBD'}</div>}
               </div>
-            :<span className="font-headline text-3xl md:text-4xl font-extralight tracking-tighter text-[#abcbda] tabular-nums" style={{fontFamily:'Manrope'}}>
-                {match.home_score??'–'}<span className="text-[#42494f] mx-1">—</span>{match.away_score??'–'}
-              </span>
+            : isScheduled
+            ? <div className="text-center">
+                <div className="font-mono text-[#70767d] text-xs">{fmtDate(match.match_date)}</div>
+              </div>
+            : <div className="flex flex-col items-center gap-1">
+                <span className="font-headline text-3xl md:text-4xl font-extralight tracking-tighter text-[#abcbda] tabular-nums" style={{fontFamily:'Manrope'}}>
+                  {match.home_score??'–'}<span className="text-[#42494f] mx-1">—</span>{match.away_score??'–'}
+                </span>
+                {match.match_date&&<div className="font-mono text-[#42494f] text-[10px]">{fmtDate(match.match_date)}</div>}
+              </div>
           }
         </div>
+
         <div className="flex flex-col items-end gap-2">
           <Avatar name={match.away_team} logo={match.away_logo||''} size="md" winner={awayWin}/>
           <div className="text-right">
@@ -510,6 +554,7 @@ function MatchCard({match,idx,onOpen}){
           </div>
         </div>
       </div>
+
       <div className="mt-4 pt-3 border-t border-[#42494f]/10 flex items-center justify-between">
         <div className="flex gap-4">
           {meta.topScorer&&<Stat label="High Scorer" val={meta.topScorer}/>}
@@ -517,12 +562,13 @@ function MatchCard({match,idx,onOpen}){
         </div>
         <div className="flex items-center gap-1.5 text-[10px] text-[#42494f] hover:text-[#abcbda] transition-colors">
           <span className="material-symbols-outlined" style={{fontSize:14}}>open_in_full</span>
-          <span className="hidden md:inline uppercase tracking-widest font-mono">Full Scorecard</span>
+          <span className="hidden md:inline uppercase tracking-widest font-mono">{isScheduled?'Match Details':'Full Scorecard'}</span>
         </div>
       </div>
     </div>
   </div>;
 }
+
 function Stat({label,val}){
   return <div><div className="text-[9px] text-[#a6acb3] uppercase tracking-widest">{label}</div><div className="text-[11px] text-[#e0e6ed] font-mono">{val}</div></div>;
 }

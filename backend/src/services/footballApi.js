@@ -1,7 +1,7 @@
 /**
  * Football Service
- * Primary  : ESPN unofficial API (no key — EPL + UCL always work)
- * Secondary: football-data.org v4 (set FOOTBALL_DATA_API_KEY for richer data)
+ * Primary  : ESPN unofficial API (no key — EPL + UCL, free, has logos + scorecard)
+ * Secondary: football-data.org v4 free tier — uses /competitions/{id}/matches per league
  */
 const axios = require('axios');
 const db    = require('../db/pool');
@@ -11,23 +11,24 @@ const log   = require('../utils/logger');
 
 const FD_BASE = 'https://api.football-data.org/v4';
 
-const FD_LEAGUE_MAP = {
-  2021: { name:'EPL',        extId:'epl',        country:'England' },
-  2001: { name:'UCL',        extId:'ucl',        country:'Europe'  },
-  2014: { name:'La Liga',    extId:'laliga',     country:'Spain'   },
-  2002: { name:'Bundesliga', extId:'bundesliga', country:'Germany' },
-  2019: { name:'Serie A',    extId:'seriea',     country:'Italy'   },
-  2015: { name:'Ligue 1',    extId:'ligue1',     country:'France'  },
-};
+// Free tier competitions available on football-data.org
+const FD_COMPETITIONS = [
+  { id: 2021, name: 'EPL',        extId: 'epl',        country: 'England' },
+  { id: 2001, name: 'UCL',        extId: 'ucl',        country: 'Europe'  },
+  { id: 2002, name: 'Bundesliga', extId: 'bundesliga', country: 'Germany' },
+  { id: 2019, name: 'Serie A',    extId: 'seriea',     country: 'Italy'   },
+  { id: 2015, name: 'Ligue 1',    extId: 'ligue1',     country: 'France'  },
+  { id: 2014, name: 'La Liga',    extId: 'laliga',     country: 'Spain'   },
+];
 
 const ESPN_LEAGUES = [
-  { espnSlug:'eng.1',          name:'EPL', country:'England', extId:'epl' },
-  { espnSlug:'UEFA.CHAMPIONS', name:'UCL', country:'Europe',  extId:'ucl' },
+  { espnSlug: 'eng.1',          name: 'EPL', country: 'England', extId: 'epl' },
+  { espnSlug: 'UEFA.CHAMPIONS', name: 'UCL', country: 'Europe',  extId: 'ucl' },
 ];
 
 async function get(url, cfg) {
   cfg = cfg || {};
-  const { data } = await axios.get(url, Object.assign({ timeout:12000 }, cfg));
+  const { data } = await axios.get(url, Object.assign({ timeout: 12000 }, cfg));
   return data;
 }
 
@@ -41,10 +42,9 @@ async function upsertLeague(name, country, sport, extId) {
 }
 
 async function upsertTeam(name, short, leagueId, extId, logo) {
-  const safeLogo = logo || '';
   await db.query(
     'INSERT INTO teams (name,short_name,league_id,external_id,logo_url) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name)',
-    [name, (short||name).slice(0,10), leagueId, extId, safeLogo]
+    [name, (short || name).slice(0, 10), leagueId, extId, logo || '']
   );
   const [r] = await db.query('SELECT id FROM teams WHERE external_id=?', [extId]);
   return r.id;
@@ -67,12 +67,12 @@ async function syncESPN(league) {
     }
     if (!home || !away) continue;
 
-    const hId = await upsertTeam(home.team.displayName, home.team.abbreviation, lgId, 'espn_t_'+home.team.id, home.team.logo||'');
-    const aId = await upsertTeam(away.team.displayName, away.team.abbreviation, lgId, 'espn_t_'+away.team.id, away.team.logo||'');
+    const hId = await upsertTeam(home.team.displayName, home.team.abbreviation, lgId, 'espn_t_' + home.team.id, home.team.logo || '');
+    const aId = await upsertTeam(away.team.displayName, away.team.abbreviation, lgId, 'espn_t_' + away.team.id, away.team.logo || '');
 
-    const sn = ev.status && ev.status.type ? ev.status.type.name : '';
-    const st = sn === 'STATUS_FINAL' ? 'completed' : sn === 'STATUS_IN_PROGRESS' ? 'live' : 'scheduled';
-    const dt = ev.date ? ev.date.replace('T',' ').replace('Z','') : null;
+    const sn  = ev.status && ev.status.type ? ev.status.type.name : '';
+    const st  = sn === 'STATUS_FINAL' ? 'completed' : sn === 'STATUS_IN_PROGRESS' ? 'live' : 'scheduled';
+    const dt  = ev.date ? ev.date.replace('T', ' ').replace('Z', '') : null;
     const ext = 'espn_soccer_' + ev.id;
     const probs = comp.predictor || null;
     const hProb = probs && probs.homeTeam ? probs.homeTeam.gameProjection : null;
@@ -100,9 +100,66 @@ async function syncESPN(league) {
   return n;
 }
 
+async function syncFDCompetition(comp, apiKey) {
+  // Fetch last 30 + next 10 matches for this competition
+  const now = Date.now();
+  const d1  = new Date(now - 30 * 86400000).toISOString().slice(0, 10);
+  const d2  = new Date(now + 10 * 86400000).toISOString().slice(0, 10);
+
+  const url  = FD_BASE + '/competitions/' + comp.id + '/matches';
+  const data = await get(url, {
+    headers: { 'X-Auth-Token': apiKey },
+    params:  { dateFrom: d1, dateTo: d2, status: 'FINISHED,SCHEDULED,IN_PLAY' }
+  });
+
+  const matches = data.matches || [];
+  const lgId    = await upsertLeague(comp.name, comp.country, 'football', comp.extId);
+  let n = 0;
+
+  for (const m of matches) {
+    if (!m.homeTeam || !m.awayTeam) continue;
+
+    const hId = await upsertTeam(
+      m.homeTeam.name || m.homeTeam.shortName || 'Unknown',
+      m.homeTeam.shortName || m.homeTeam.tla || '',
+      lgId, 'fd_t_' + m.homeTeam.id, ''
+    );
+    const aId = await upsertTeam(
+      m.awayTeam.name || m.awayTeam.shortName || 'Unknown',
+      m.awayTeam.shortName || m.awayTeam.tla || '',
+      lgId, 'fd_t_' + m.awayTeam.id, ''
+    );
+
+    const st  = m.status === 'FINISHED' ? 'completed'
+              : (m.status === 'IN_PLAY' || m.status === 'PAUSED') ? 'live'
+              : 'scheduled';
+    const dt  = m.utcDate.replace('T', ' ').replace('Z', '');
+    const ext = 'fd_m_' + m.id;
+
+    await db.query(
+      'INSERT INTO matches (league_id,home_team_id,away_team_id,match_date,status,venue,external_id) VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE status=VALUES(status),match_date=VALUES(match_date)',
+      [lgId, hId, aId, dt, st, m.venue || '', ext]
+    );
+    const rows = await db.query('SELECT id FROM matches WHERE external_id=?', [ext]);
+    const match = rows[0];
+
+    if (st === 'completed' && m.score && m.score.fullTime) {
+      const h = m.score.fullTime.home || 0;
+      const a = m.score.fullTime.away || 0;
+      await db.query(
+        'INSERT INTO results (match_id,home_score,away_score,winner_team_id) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE home_score=VALUES(home_score),away_score=VALUES(away_score),winner_team_id=VALUES(winner_team_id)',
+        [match.id, h, a, h > a ? hId : a > h ? aId : null]
+      );
+    }
+    n++;
+  }
+  return n;
+}
+
 async function syncFootball() {
   let total = 0;
 
+  // ESPN sync — current week EPL + UCL with logos
   for (let i = 0; i < ESPN_LEAGUES.length; i++) {
     const lg = ESPN_LEAGUES[i];
     try {
@@ -114,57 +171,25 @@ async function syncFootball() {
     }
   }
 
+  // football-data.org — per-competition endpoint (free tier compatible)
   if (process.env.FOOTBALL_DATA_API_KEY) {
-    try {
-      const now = Date.now();
-      const d1  = new Date(now - 14*86400000).toISOString().slice(0,10);
-      const d2  = new Date(now + 14*86400000).toISOString().slice(0,10);
-      const url = FD_BASE + '/matches?dateFrom=' + d1 + '&dateTo=' + d2;
-
-      const data = await get(url, { headers: { 'X-Auth-Token': process.env.FOOTBALL_DATA_API_KEY } });
-      const matches = data.matches || [];
-
-      for (let i = 0; i < matches.length; i++) {
-        const m      = matches[i];
-        const mapped  = FD_LEAGUE_MAP[m.competition.id];
-        const lgName  = mapped ? mapped.name    : m.competition.name;
-        const lgExtId = mapped ? mapped.extId   : 'fd_' + m.competition.id;
-        const lgCntry = mapped ? mapped.country : m.area.name;
-        const lgId    = await upsertLeague(lgName, lgCntry, 'football', lgExtId);
-
-        const hId = await upsertTeam(m.homeTeam.name, m.homeTeam.shortName||m.homeTeam.tla||'', lgId, 'fd_t_'+m.homeTeam.id, '');
-        const aId = await upsertTeam(m.awayTeam.name, m.awayTeam.shortName||m.awayTeam.tla||'', lgId, 'fd_t_'+m.awayTeam.id, '');
-
-        const st  = m.status === 'FINISHED' ? 'completed' : (m.status === 'IN_PLAY' || m.status === 'PAUSED') ? 'live' : 'scheduled';
-        const dt  = m.utcDate.replace('T',' ').replace('Z','');
-        const ext = 'fd_m_' + m.id;
-
-        await db.query(
-          'INSERT INTO matches (league_id,home_team_id,away_team_id,match_date,status,venue,external_id) VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE status=VALUES(status),match_date=VALUES(match_date)',
-          [lgId, hId, aId, dt, st, m.venue||'', ext]
-        );
-        const rows2 = await db.query('SELECT id FROM matches WHERE external_id=?', [ext]);
-        const match = rows2[0];
-
-        if (st === 'completed' && m.score && m.score.fullTime) {
-          const h = m.score.fullTime.home || 0;
-          const a = m.score.fullTime.away || 0;
-          await db.query(
-            'INSERT INTO results (match_id,home_score,away_score,winner_team_id) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE home_score=VALUES(home_score),away_score=VALUES(away_score),winner_team_id=VALUES(winner_team_id)',
-            [match.id, h, a, h > a ? hId : a > h ? aId : null]
-          );
-        }
-        total++;
+    for (let i = 0; i < FD_COMPETITIONS.length; i++) {
+      const comp = FD_COMPETITIONS[i];
+      try {
+        const n = await syncFDCompetition(comp, process.env.FOOTBALL_DATA_API_KEY);
+        total += n;
+        log.info('[football] fd.org ' + comp.name + ': ' + n);
+        // Small delay to respect rate limit (10 req/min on free tier)
+        await new Promise(resolve => setTimeout(resolve, 6500));
+      } catch(e) {
+        log.warn('[football] fd.org ' + comp.name + ' failed:', e.message);
       }
-      log.info('[football] fd.org synced additional matches');
-    } catch(e) {
-      log.warn('[football] fd.org failed:', e.message);
     }
   }
 
   cache.invalidate('scores:');
   cache.invalidate('upcoming:');
-  ws.emitScoresUpdate({ synced:total, source:'football' });
+  ws.emitScoresUpdate({ synced: total, source: 'football' });
   return total;
 }
 
